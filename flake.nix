@@ -11,8 +11,12 @@
     with nixpkgs.legacyPackages.${system};
     with lib;
     let
+      pyenv = python3.withPackages(ps: with ps; [
+        click
+      ]);
       scripts = {
         example = "echo hello from $ENV_ROOT";
+        x = "${pyenv}/bin/python $ENV_ROOT/poke.py $@";
       };
     in {
       devShell = stdenvNoCC.mkDerivation {
