@@ -12,7 +12,9 @@
     with lib;
     let
       pyenv = python3.withPackages(ps: with ps; [
+        appdirs
         click
+        ipython
       ]);
       scripts = {
         example = "echo hello from $ENV_ROOT";
@@ -22,6 +24,7 @@
       devShell = stdenvNoCC.mkDerivation {
         name = "shell";
         buildInputs = attrsets.mapAttrsToList writeShellScriptBin scripts ++ [
+          pyenv
         ];
       };
     });

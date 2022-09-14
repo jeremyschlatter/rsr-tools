@@ -1,9 +1,15 @@
 import json
 import os
 import pathlib
+import pickle
 import subprocess
 
+import appdirs
 import click
+
+rsr_dir = pathlib.Path.home() / 'src' / 'github.com' / 'reserve-protocol' / 'protocol'
+
+os.chdir(rsr_dir)
 
 # list manually compiled from scripts/verification/*.js
 all_contracts = {
@@ -85,14 +91,66 @@ all_contracts = {
 
 }
 
+def walk(d, prefix=[]):
+    res = []
+    for k, v in d.items():
+        if type(v) is str:
+            res.append((prefix + [k], v))
+        else:
+            res.extend(walk(v, prefix + [k]))
+    return res
+
+def flatten(xs):
+    return {'.'.join(ks): v for ks, v in xs}
+
+metas = flatten(walk(all_contracts))
+
+cache_dir = appdirs.user_cache_dir('github_jeremyschlatter_rsr-tools')
+print(cache_dir)
+
+def memo_build_info(path):
+    path = pathlib.Path(path).resolve()
+    os.makedirs(cache_dir, exist_ok=True)
+    cached = pathlib.Path(cache_dir) / path.name
+    if cached.is_file():
+        with open(cached, 'rb') as f:
+            return pickle.load(f)
+    with open(path) as f:
+        build_info = json.load(f)['output']['sources']
+
+        clean = {}
+
+        for c in metas.values():
+            (p, name) = c.split(':')
+            for node in build_info[p]['ast']['nodes']:
+                if node['nodeType'] == 'ContractDefinition' and node['name'] == name:
+                    fns = {}
+                    for node in node['nodes']:
+                        if node['nodeType'] == 'FunctionDefinition':
+                            d = node.get('documentation')
+                            fns[node['name']] = d
+                    if not p in clean:
+                        clean[p] = {}
+                    clean[p][name] = fns
+
+    with open(cached, 'wb') as f:
+        pickle.dump(clean, f)
+
+    return clean
+
+def abi_and_ast(contract):
+    (path, name) = contract.split(':')
+    with open(f'artifacts/{path}/{name}.json') as f:
+        abi = json.load(f)['abi']
+    with open(f'artifacts/{path}/{name}.dbg.json') as f:
+        build_info = memo_build_info(f'artifacts/{path}/{json.load(f)["buildInfo"]}')
+    return (abi, build_info[path][name])
+
 @click.group()
 def cli():
     pass
 
 def setup():
-    rsr_dir = pathlib.Path.home() / 'src' / 'github.com' / 'reserve-protocol' / 'protocol'
-
-    os.chdir(rsr_dir)
 
     chainid = 31337
 
@@ -101,29 +159,7 @@ def setup():
         ['RTKN-tmp-deployments', 'tmp-assets-collateral', 'tmp-deployments']
     ]
 
-    artifacts = subprocess.check_output([
-        'fd', '-e', 'json', '-E', '*.dbg.json', '.', 'artifacts/contracts',
-    ]).decode().split()
-
-    def walk(d, prefix=[]):
-        res = []
-        for k, v in d.items():
-            if type(v) is str:
-                res.append((prefix + [k], v))
-            else:
-                res.extend(walk(v, prefix + [k]))
-        return res
-
     cs = []
-
-    def lookup_artifact(name: str):
-        name = name[0].capitalize() + name[1:]
-        for a in artifacts:
-            if a.endswith(f'{name}.json'):
-                return a
-            if a.endswith(f'{name}P1.json'):
-                return a
-        return None
 
     for blob in blobs:
         with open(blob) as f:
@@ -134,20 +170,15 @@ def setup():
     no = 0
 
     for c, addr in cs:
-        a = lookup_artifact(c[-1])
-        if a:
+        m = metas.get('.'.join(c))
+        if m:
             yes += 1
-            with open(a) as f:
-                abi = json.load(f)['abi']
-            with open(a.replace('.json', '.dbg.json')) as f:
-                buildInfo = json.load(f)['buildInfo']
-            # with open(buildInfo) as f:
-                # json.load(f)['output']['sources']['contracts'][
-            cli.add_command(contract_interface(c[-1], addr, abi), name=c[-1])
+            (abi, ast) = abi_and_ast(m)
+            cli.add_command(contract_interface(c[-1], addr, abi, ast), name=c[-1])
         else:
             no += 1
 
-def contract_interface(name: str, addr: str, abi):
+def contract_interface(name: str, addr: str, abi, ast):
     @click.group(name=name)
     def group():
         pass
@@ -160,6 +191,7 @@ def contract_interface(name: str, addr: str, abi):
             short_help=f'''({
                 ', '.join(f"{i['type']} {i['name']}" for i in inputs)
             })''',
+            help=(ast.get(name) or {}).get('text', '').replace('\n', '\n\n'),
         )
         def f():
             print(f.name)
