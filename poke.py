@@ -106,7 +106,6 @@ def flatten(xs):
 metas = flatten(walk(all_contracts))
 
 cache_dir = appdirs.user_cache_dir('github_jeremyschlatter_rsr-tools')
-print(cache_dir)
 
 def memo_build_info(path):
     path = pathlib.Path(path).resolve()
@@ -156,7 +155,7 @@ def setup():
 
     blobs = [
         f'{chainid}-{x}.json' for x in
-        ['RTKN-tmp-deployments', 'tmp-assets-collateral', 'tmp-deployments']
+        ['tmp-deployments', 'tmp-assets-collateral', 'RTKN-tmp-deployments']
     ]
 
     cs = []
@@ -184,24 +183,46 @@ def contract_interface(name: str, addr: str, abi, ast):
         pass
     group.name == name
 
-    def fn_interface(name, inputs):
+    rw = {
+        'pure': 'read',
+        'view': 'read',
+        'nonpayable': 'write',
+        'payable': 'write',
+    }
+
+    def fn_interface(name, inputs, x):
+        mutability = rw[x["stateMutability"]]
+
         @group.command(
             name=name,
             params=[click.Argument([i['name']]) for i in inputs],
-            short_help=f'''({
+            short_help=f'''{mutability}\t({
                 ', '.join(f"{i['type']} {i['name']}" for i in inputs)
             })''',
             help=(ast.get(name) or {}).get('text', '').replace('\n', '\n\n'),
         )
-        def f():
-            print(f.name)
+        def f(**kwargs):
+            subprocess.check_call([
+                'cast',
+                'call' if mutability == 'read' else 'send',
+                '--mnemonic', 'mnemonic.txt',
+                addr,
+                f'''{name}({
+                    ','.join(i['type'] for i in x['inputs'])
+                })({
+                    ','.join(o['type'] for o in x['outputs'])
+                })''',
+            ] + [
+                kwargs[arg['name']] for arg in x['inputs']
+            ])
+
         f.name == name
 
         return f
 
     for x in abi:
         if x['type'] == 'function':
-            fn_interface(x['name'], x['inputs'])
+            fn_interface(x['name'], x['inputs'], x)
 
     return group
 
