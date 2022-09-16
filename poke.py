@@ -165,17 +165,11 @@ def setup():
             d = json.load(f)
             cs.extend(walk(d))
 
-    yes = 0
-    no = 0
-
     for c, addr in cs:
         m = metas.get('.'.join(c))
         if m:
-            yes += 1
             (abi, ast) = abi_and_ast(m)
             cli.add_command(contract_interface(c[-1], addr, abi, ast), name=c[-1])
-        else:
-            no += 1
 
 def contract_interface(name: str, addr: str, abi, ast):
     @click.group(name=name)
